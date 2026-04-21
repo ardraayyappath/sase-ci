@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import allure
-import pytest
 
 
-@pytest.fixture(autouse=True)
-def _allure_env_tag(request: pytest.FixtureRequest) -> None:
-    """Tag every test with its environment epic and feature for Allure grouping."""
+def tag_allure_env(request: object) -> None:
+    """Apply Allure epic/feature tags based on the env_name fixture value.
+
+    Accepts a pytest.FixtureRequest but does not import pytest, keeping
+    src/ free of test-framework dependencies.
+    """
     env_name: str | None = None
-    if "env_name" in request.fixturenames:
-        env_name = request.getfixturevalue("env_name")
+    if "env_name" in request.fixturenames:  # type: ignore[attr-defined]
+        env_name = request.getfixturevalue("env_name")  # type: ignore[attr-defined]
     if env_name:
         allure.dynamic.epic(f"env:{env_name}")
-    allure.dynamic.feature(request.node.parent.name if request.node.parent else "root")
+    parent = request.node.parent  # type: ignore[attr-defined]
+    allure.dynamic.feature(parent.name if parent else "root")

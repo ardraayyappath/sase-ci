@@ -9,9 +9,11 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 from pathlib import Path
 
+import pytest
+
 from src.clients.env_client import EnvironmentClient
 from src.config.loader import load_environments
-from src.reporting.allure_hooks import _allure_env_tag  # noqa: F401 — registers autouse fixture
+from src.reporting.allure_hooks import tag_allure_env
 
 # Single authoritative anchor for test data paths — imported by test modules.
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -54,6 +56,11 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
         envs = all_envs
 
     metafunc.parametrize("env_name", envs, scope="session", ids=lambda x: x)
+
+
+@pytest.fixture(autouse=True)
+def _allure_env_tag(request: pytest.FixtureRequest) -> None:
+    tag_allure_env(request)
 
 
 @pytest.fixture(scope="session")
