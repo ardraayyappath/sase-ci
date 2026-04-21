@@ -666,6 +666,20 @@ Actual result: exactly those three failed, pass cases were unaffected. ✓
 
 Implementation restored to `>` after both mutations confirmed.
 
+**Mutation kill matrix:**
+
+| Test | Mutation 1 (`>=`) | Mutation 2 (check deleted) | Verdict |
+|------|:-----------------:|:--------------------------:|---------|
+| `test_sla_passes_when_under_threshold` | pass | pass | correctly unaffected |
+| `test_sla_passes_at_exact_threshold` | **FAIL** ✓ | pass | kills mutation 1 |
+| `test_sla_raises_just_over_threshold` | pass | **FAIL** ✓ | kills mutation 2 |
+| `test_sla_raises_well_over_threshold` | pass | **FAIL** ✓ | kills mutation 2 |
+| `test_sla_violation_is_assertion_error` | pass | pass | correctly unaffected |
+| `test_sla_violation_message_contains_context` | pass | **FAIL** ✓ | kills mutation 2 |
+
+Every test killed at least one mutation. Every mutation was caught by exactly the tests
+you would expect — no false kills, no survivors.
+
 ---
 
 ## Summary of all backtracks
