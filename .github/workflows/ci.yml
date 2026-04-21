@@ -20,30 +20,39 @@ jobs:
       - name: Run tests
         run: pytest --alluredir=allure-results --junitxml=junit.xml
 
+      - name: Install Allure CLI
+        if: always()
+        run: |
+          wget -qO /tmp/allure.tgz \
+            https://github.com/allure-framework/allure2/releases/download/2.29.0/allure-2.29.0.tgz
+          sudo tar -xzf /tmp/allure.tgz -C /opt
+          sudo ln -s /opt/allure-2.29.0/bin/allure /usr/local/bin/allure
+
       - name: Generate Allure report
         if: always()
-        uses: simple-elf/allure-report-action@v1.7
-        with:
-          allure_results: allure-results
-          allure_report: allure-report
+        run: allure generate allure-results -o allure-report --clean
 
       - name: Upload Allure report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: allure-report
-          path: allure-report
+          path: panw-takehome/allure-report
 
       - name: Test summary
         if: always()
         run: |
           python - <<'PY' >> $GITHUB_STEP_SUMMARY
-          import xml.etree.ElementTree as ET
-          r = ET.parse("junit.xml").getroot()
-          attrs = r.attrib if r.tag == "testsuite" else r[0].attrib
-          print(f"### Test Results")
-          print(f"- Tests: {attrs.get('tests', '?')}")
-          print(f"- Failures: {attrs.get('failures', '?')}")
-          print(f"- Errors: {attrs.get('errors', '?')}")
-          print(f"- Skipped: {attrs.get('skipped', '?')}")
+          import xml.etree.ElementTree as ET, os
+          path = "junit.xml"
+          if not os.path.exists(path):
+              print("### Test Results\n- junit.xml not found (tests may not have run)")
+          else:
+              r = ET.parse(path).getroot()
+              attrs = r.attrib if r.tag == "testsuite" else r[0].attrib
+              print(f"### Test Results")
+              print(f"- Tests: {attrs.get('tests', '?')}")
+              print(f"- Failures: {attrs.get('failures', '?')}")
+              print(f"- Errors: {attrs.get('errors', '?')}")
+              print(f"- Skipped: {attrs.get('skipped', '?')}")
           PY
