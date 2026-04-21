@@ -110,6 +110,98 @@ green tests that add no real signal.
 
 ---
 
+---
+
+## Genuine subagent use cases — three patterns demonstrated
+
+### When NOT to use subagents
+
+**Case rejected: parallel validator + test generation for Chinese cities**
+
+Proposed: one agent runs `validator-generator`, another runs `test-generator`, both
+targeting new Chinese cities in `test_data/cities.json`.
+
+Rejected because:
+- The test file imports the validator (`from src.validators.china_city import ChinaCityValidator`). If both agents run in parallel, the test-generator must know the validator class name upfront — which means the design work is already done and the parallelism saves nothing.
+- Each file is ~40 lines. Subagent overhead (context init, tool permissions, result marshalling) dominates.
+- Both files can be generated sequentially in under 10 seconds.
+
+**Rule derived:** subagents are worth the overhead when tasks are non-trivial AND outputs go to entirely different files with zero import dependency between them.
+
+---
+
+### Case 4 — Parallel coverage audit (2 agents)
+
+**What ran in parallel:**
+- Agent A: read all files under `tests/countries/`, list every `env_client.get()` call, parametrize source, and whether a `@pytest.mark.negative` test and `BaseValidator` schema test exist per endpoint
+- Agent B: same analysis for `tests/weather/`
+
+**Why genuinely parallel:** the two directories share no files. Neither agent's output depends on the other's. Both produce a coverage matrix — results merged by hand.
+
+**Findings:**
+
+| Environment | Covered endpoints | Missing |
+|---|---|---|
+| countries | `/name/{name}`, `/region/{name}`, `/all` | `/alpha/{code}`, `/currency/`, `/lang/`, `/capital/`, `/subregion/` |
+| weather | `/forecast` (hourly `temperature_2m` only) | daily variables, multiple hourly vars, negative tests |
+
+**Used directly to scope Case 2.**
+
+---
+
+### Case 1 — Parallel edge-case analysis (2 agents)
+
+**What ran in parallel:**
+- Agent A: `edge-case-analyzer` for `GET /name/{country}` — read `CountryValidator`, `test_countries.py`, produced labelled table
+- Agent B: `edge-case-analyzer` for `GET /all` — same inputs, different endpoint
+
+**Why genuinely parallel:** each analysis reads its own endpoint docs and produces an independent labelled table. No shared output.
+
+**Selected high-value findings actioned:**
+
+| Endpoint | Finding | Action |
+|---|---|---|
+| `/name/{country}` | `name.common` not checked in `CountryValidator` | Added to `AlphaCountryValidator.custom_checks` |
+| `/name/{country}` | `cca3` length not asserted | Added `len(cca3) == 3` in `AlphaCountryValidator` |
+| `/all` | Durable lower bound `>= 195` not asserted | Noted — deferred to avoid fragility |
+| `/all` | Invalid `?fields=` negative test missing | Noted for future sprint |
+
+**Correctly labelled as hallucinated (not implemented):**
+- API returns duplicate `cca3` codes — no public evidence
+- Exact country count assertion — volatile, fails when API adds territories
+- HTTP 429 rate limiting — no published limit on this free API
+
+---
+
+### Case 2 — Parallel validator + test generation across environments (2 agents)
+
+**Informed by:** Case 4 audit gaps — `/alpha/{code}` uncovered in countries, daily forecast uncovered in weather.
+
+**What ran in parallel:**
+- Agent A (countries): generated `src/validators/alpha_country.py` (`AlphaCountryValidator`) + `test_data/country_codes.json` + `tests/countries/test_alpha.py`
+- Agent B (weather): generated `src/validators/daily_weather.py` (`DailyWeatherValidator`) + `tests/weather/test_daily_forecast.py`
+
+**Why genuinely parallel:**
+- `AlphaCountryValidator` and `DailyWeatherValidator` are in different files and never import each other
+- `test_alpha.py` and `test_daily_forecast.py` are in different directories
+- Agent A fetched a live `/alpha/DEU` response; Agent B fetched a live `/forecast?daily=...` response — independent API calls
+- Zero reconciliation needed after merge
+
+**Results on first run:** 48 passed, 0 failed. Neither agent's output required manual fixes.
+
+**What each agent enforced from the skill files:**
+
+| Constraint | Agent A (countries) | Agent B (weather) |
+|---|---|---|
+| `BaseValidator` subclass, no pydantic | ✓ `AlphaCountryValidator(BaseValidator)` | ✓ `DailyWeatherValidator(BaseValidator)` |
+| Data from `test_data/*.json`, not inline | ✓ `country_codes.json` | ✓ reused `cities.json` |
+| `env_client.get()` only, no `import requests` | ✓ | ✓ |
+| `allure.step` for logical phases only | ✓ | ✓ |
+| `@pytest.mark.negative` on negative tests | ✓ | ✓ |
+| Physics/domain invariant in `custom_checks` | ✓ `len(cca3)==3`, `ccn3.isdigit()` | ✓ `max >= min` per day |
+
+---
+
 ## Architectural decisions validated with Claude
 
 ### Decision: `pytest_generate_tests` over module-level `pytestmark`
