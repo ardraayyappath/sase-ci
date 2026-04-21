@@ -4,11 +4,10 @@ from src.clients.env_client import EnvironmentClient
 
 
 def test_base_url_reachable(env_client: EnvironmentClient) -> None:
-    resp = env_client.session.get(
-        env_client.config.base_url,
-        timeout=5,
-        verify=env_client.config.verify_ssl,
-    )
+    # Empty path hits base_url directly (e.g. https://restcountries.com/v3.1).
+    # Routed through env_client.get so SLA enforcement and Allure attachment apply.
+    # Any response < 500 means the server is up; 404 is acceptable here.
+    resp = env_client.get("")
     assert resp.status_code < 500
 
 
