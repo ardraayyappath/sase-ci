@@ -3,13 +3,10 @@ from __future__ import annotations
 import urllib3
 import requests
 import pytest
+from pathlib import Path
 
 # Suppress InsecureRequestWarning when verify_ssl=false is set in environments.yaml
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-from pathlib import Path
-
-import pytest
 
 from src.clients.env_client import EnvironmentClient
 from src.config.loader import load_environments
