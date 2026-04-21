@@ -1,0 +1,12 @@
+{
+  "valid_codes": [
+    {"code": "DEU", "type": "cca3", "description": "Germany by alpha-3"},
+    {"code": "FR",  "type": "cca2", "description": "France by alpha-2"},
+    {"code": "076", "type": "ccn3", "description": "Brazil by numeric"}
+  ],
+  "invalid_codes": [
+    {"code": "ZZZ",    "description": "nonexistent alpha-3"},
+    {"code": "999",    "description": "nonexistent numeric"},
+    {"code": "TOOLONG","description": "exceeds max code length"}
+  ]
+}
