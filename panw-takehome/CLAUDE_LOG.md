@@ -264,3 +264,14 @@ def test_region_returns_sufficient_countries(env_client: EnvironmentClient, regi
 
 Rules that fired: no `requests` import, no `time.time()`, parametrize from `regions.json`,
 `pytest.param(..., id=...)` for Allure names.
+
+---
+
+## Summary
+
+Claude was used as a constrained code-generation and analysis system rather than an
+authoritative source. Rules ensured architectural consistency, subagents were used only
+for independent workstreams, and all outputs were reviewed and corrected where necessary.
+
+This approach reduced boilerplate generation time while preserving control over design,
+test stability, and framework extensibility.
