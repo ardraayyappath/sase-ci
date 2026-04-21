@@ -81,7 +81,17 @@ optional `custom_checks`. No third-party schema library is used; validation step
 - **`verify_ssl` field in YAML** — the target test machine runs behind a TLS-inspecting
   proxy that presents a self-signed chain. Rather than patching `requests` globally or
   hard-coding `verify=False`, `verify_ssl` is an explicit, documented YAML field with a
-  default of `true`. Reviewers can see the setting and override it per environment.
+  default of `true`. Both environments currently have `verify_ssl: false` as a local
+  override for this proxy; in a clean environment (CI, another developer's machine) this
+  should be set to `true`. Changing it requires a one-line YAML edit — no code change.
+
+- **No retry logic by design** — `EnvironmentClient` makes no attempt to retry failed
+  requests. For a framework testing public third-party APIs, retry logic masks real
+  intermittent failures and makes test behaviour non-deterministic — a test that passes
+  on the third attempt tells you nothing useful. The natural extension point if retry is
+  ever needed is [`tenacity`](https://tenacity.readthedocs.io) configured via a
+  `max_retries` field in `EnvironmentConfig`, keeping retry policy in YAML alongside
+  other environment-specific thresholds.
 
 - **`test_all_countries_have_positive_population` intentionally relaxed from spec** — the
   assignment says "assert every country has `population > 0`". The REST Countries API
