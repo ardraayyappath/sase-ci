@@ -1,0 +1,24 @@
+# Python build artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Test output
+allure-results/
+allure-report/
+junit.xml
+.pytest_cache/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+
+# Local-only study materials
+SLIDES.md
+INTERVIEW_PREP.md
+exhaustive_claude_log.md
