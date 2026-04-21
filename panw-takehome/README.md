@@ -106,6 +106,22 @@ optional `custom_checks`. No third-party schema library is used; validation step
 - **Spec discrepancy noted** — the assignment PDF referenced `api.openmeteo.com`; the actual
   working host is `api.open-meteo.com`. The YAML uses the correct host.
 
+## Known limitations and extension points
+
+- **No retry logic** — `EnvironmentClient` makes no attempt to retry failed requests.
+  Retry logic in tests masks real intermittent failures and makes outcomes
+  non-deterministic. If retry is ever needed, [`tenacity`](https://tenacity.readthedocs.io)
+  with a `max_retries` field in `EnvironmentConfig` is the natural extension point —
+  policy stays in YAML alongside other environment thresholds.
+
+- **Single-error validation** — `BaseValidator.validate()` stops at the first assertion
+  failure. If a response is missing three fields, only the first is reported per run.
+  Multi-error collection (gather all failures before asserting) would require wrapping
+  each `assert` in `custom_checks` with `try/except` and accumulating errors — a
+  meaningful change to the base class for a marginal debugging benefit in a take-home
+  context. The current messages are precise enough (validator class + field name) that
+  fixing and re-running is trivial.
+
 ## CI
 
 The GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every push:
