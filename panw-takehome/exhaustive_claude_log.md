@@ -758,6 +758,115 @@ reading the documentation without diving into the test code.
 
 ---
 
+---
+
+## Skill invocations — all three skills run with real inputs
+
+### Skill run 1: validator-generator → `RegionCountryValidator`
+
+**When:** After deciding to add `/region/{name}` tests.
+
+**Input supplied:**
+- Live API response entry (Mongolia from `/region/asia`) fetched during the session
+- Required fields: `name`, `cca3`, `region`, `population`, `capital`
+- Semantic constraints: `population >= 0`, `region` non-empty, `cca3` exactly 3 chars
+
+**Rules that shaped the output:**
+- `framework-rules.md`: "Do not introduce `pydantic` or `jsonschema`" → output used
+  `BaseValidator` subclass with `ClassVar` tuples, not `pydantic.BaseModel`
+- `code-style.md`: assertion messages must include `cls.__name__` → all three
+  `custom_checks` assertions include it
+- `validator-generator.md`: "Required fields must be in the tuple, not custom_checks"
+  → presence checks kept in `required_fields`, semantic checks in `custom_checks`
+
+**Output:** `src/validators/region_country.py` — complete, no manual edits needed.
+
+**What a rule-free generation would have produced:** `pydantic.BaseModel` with a
+`@validator` decorator — idiomatic Python but incompatible with the Allure step
+attachment design, since `ValidationError` would surface outside the test lifecycle.
+
+---
+
+### Skill run 2: test-generator → `test_regions.py`
+
+**When:** Immediately after `RegionCountryValidator` was written.
+
+**Input supplied:**
+- `endpoint_path`: `/region/{region}`
+- `http_method`: GET
+- `environment`: countries
+- `expected_response_fields`: name, cca3, region, population, capital
+- `negative_cases`: invalid region name, numeric string, empty string
+
+**Rules that shaped the output:**
+- `testing-standards.md`: "Parametrize test data from JSON in `test_data/`" → created
+  `test_data/regions.json` with 5 valid regions and 3 invalid inputs; no inline literals
+- `framework-rules.md`: "Never `import requests` in a test" → all HTTP via `env_client.get()`
+- `framework-rules.md`: "Never assert on response time" → no `time.*` import, SLA automatic
+- `testing-standards.md`: "Use `pytest.param(..., id=...)` for readable Allure names"
+  → all parametrize calls use `id=r["name"]` / `id=r["description"]`
+- `testing-standards.md`: "Negative tests use `@pytest.mark.negative`" → applied
+
+**Output:** `tests/countries/test_regions.py` — 3 test functions, 13 test cases,
+13/13 passed on first run without any manual fixes.
+
+**What a rule-free generation would have produced:**
+```python
+# would have inlined data and imported requests directly
+@pytest.mark.parametrize("region", ["asia", "europe", "africa"])
+def test_region(region):
+    resp = requests.get(f"https://restcountries.com/v3.1/region/{region}")
+    assert resp.status_code == 200
+```
+
+---
+
+### Skill run 3: edge-case-analyzer → `WeatherValidator` hardening
+
+**When:** After completing all happy-path tests; used to audit coverage quality.
+
+**Input — two invocations in the same run:**
+- `/region/{name}`: list of country objects, known invariants cca3/population/region
+- `/forecast`: hourly arrays, known invariants temperature range and non-empty time list
+
+**How the labelling system worked in practice:**
+
+The skill's three-tier label (`high-value` / `optional` / `likely hallucinated`) acted as
+a filter that prevented low-signal tests from being written:
+
+| Label | Count across both endpoints | Action taken |
+|-------|----------------------------|--------------|
+| high-value | 7 | Implemented or confirmed already covered |
+| optional | 5 | Skipped with documented rationale |
+| likely hallucinated | 5 | Skipped — no evidence from API behavior |
+
+**Concrete gaps found (high-value, not previously covered):**
+
+1. **`null` entries in `temperature_2m`** — Open-Meteo uses `null` for missing values
+   when a weather station is offline. The old code looped `for temp in temps` and checked
+   `-80 <= temp <= 60`. With `temp = None`, Python evaluates `-80 <= None` which raises
+   `TypeError` rather than a clean assertion failure. The test would have shown an ERROR
+   instead of a FAILED — wrong signal.
+
+2. **Array length mismatch (`time` vs `temperature_2m`)** — Not asserted anywhere. If
+   the API ever returned mismatched arrays (a regression), a consumer zipping them would
+   silently drop or repeat values. The validator is the right place to catch this.
+
+3. **`len(times) >= 24`** — Previous check only asserted non-empty. A single-entry array
+   would pass but represents a degraded response. 24 is a durable bound (one full day)
+   that doesn't depend on knowing the exact forecast window.
+
+**What "likely hallucinated" prevented being written:**
+- Concurrent load test to check for 429 rate limiting (public API, no published limit)
+- Exact temperature boundary test (`temp == -80.0`) — real atmosphere never produces this
+- Exact coordinate match assertion — API snaps to nearest grid point by design
+
+**Validator fix result:** `WeatherValidator` went from 2 checks in `custom_checks` to 5.
+All 5 weather tests continued to pass against the real API, confirming the new assertions
+are correct for real data and only tighten coverage for degraded-data scenarios.
+
+---
+
 ## Summary of all backtracks
 
 | # | Stage | Type | Files changed | Iterations |
