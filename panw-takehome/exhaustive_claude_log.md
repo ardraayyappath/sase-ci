@@ -462,6 +462,188 @@ because the env didn't match the test — which was confusing and technically wr
 
 ---
 
+---
+
+## Error 7 — CI workflow not triggering; would have failed on working directory (post-push)
+
+**Where:** `.github/workflows/ci.yml` — discovered after pushing to GitHub and seeing no Actions run start.
+
+**What happened:**
+The user pushed the repo to GitHub. Actions did not visibly start. Investigation revealed
+two layered problems:
+
+**Problem A — workflow file was inside the project subdirectory, not the repo root.**
+The git repository root is `/prisma/` but the project lives at `/prisma/panw-takehome/`.
+The original workflow was created at `panw-takehome/.github/workflows/ci.yml`. GitHub only
+recognises workflows at `.github/workflows/` relative to the **repo root**, so Actions never
+triggered at all. The user had already fixed this in a prior commit ("Fix: Move .github
+workflow to the root directory") by moving the file to `/prisma/.github/workflows/ci.yml`.
+After that commit, Actions should have been able to trigger — but that push itself may not
+have triggered a run if the file move landed in the same push as another change, or if
+Actions was still settling.
+
+**Problem B — `run:` steps would have failed even after triggering.**
+After the move, the `run:` steps (`pip install -e ".[dev]"`, `pytest`, etc.) would execute
+from the repo root (`/prisma/` on the runner), where there is no `pyproject.toml`, no
+`tests/`, and no `config/`. The install and test steps would both have errored immediately.
+
+**Root cause of Problem B:**
+`defaults.run.working-directory` was never set. When the workflow lived inside
+`panw-takehome/.github/`, this was a latent bug — it would have failed the same way if it
+had ever triggered. Moving the file to the repo root made the bug active.
+
+**Fix:**
+Added `defaults.run.working-directory: panw-takehome` at the job level:
+
+```yaml
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: panw-takehome   # ← added
+    steps:
+      ...
+```
+
+`defaults.run` applies to all `run:` steps in the job. `uses:` steps (actions/checkout,
+allure-report-action, upload-artifact) are unaffected — they don't use `run:` and operate
+correctly from the repo root.
+
+**Why job-level `defaults` over per-step `working-directory`:**
+Setting it once at the job level is DRY and guarantees every future `run:` step added to
+the workflow inherits the correct directory without needing to remember to add it.
+
+**Backtrack cost:** 1 file edited, 1 commit, 1 push.
+
+---
+
+---
+
+## Error 8 — `simple-elf/allure-report-action@v1.7` uses EOL Docker image; blocks entire job (first real CI run)
+
+**Where:** `.github/workflows/ci.yml` — observed from `gh run view --log` output.
+
+**What happened:**
+The CI run failed before `Install` or `Run tests` ever executed. The log showed:
+```
+Build simple-elf/allure-report-action@v1.7
+ERROR: failed to build: openjdk:8-jre-alpine: not found
+##[error]Docker build failed with exit code 1
+```
+GitHub retried the Docker build 3 times, then skipped to `if: always()` steps.
+The "Test summary" step then failed with:
+```
+##[error]An error occurred trying to start process '/usr/bin/bash'
+with working directory '.../panw-takehome'. No such file or directory
+```
+
+**Why two failures from one root cause:**
+GitHub pre-builds Docker-based actions (`uses:` pointing to a Dockerfile) **before the
+job steps run** — before `actions/checkout@v4` even executes. When the Docker build fails,
+the runner transitions directly to `if: always()` steps. But since checkout never ran,
+the workspace is empty: `panw-takehome/` doesn't exist, so `defaults.run.working-directory`
+points to a non-existent path, and every `if: always()` `run:` step errors.
+
+The "working directory not found" error on Test summary was a **symptom** of the Docker
+failure, not an independent bug. It would have disappeared on its own once the Docker
+issue was fixed.
+
+**Root cause of Docker failure:**
+`simple-elf/allure-report-action@v1.7` was pinned to `FROM openjdk:8-jre-alpine` in its
+Dockerfile. The `openjdk:8-jre-alpine` image was removed from Docker Hub when OpenJDK
+dropped Alpine Linux support for JDK 8. The action is effectively abandoned at v1.7 and
+cannot be used on current runners.
+
+**Decision fork — how to generate the Allure report:**
+
+| Option | Pros | Cons |
+|--------|------|------|
+| Upgrade to `simple-elf/allure-report-action@v2` | One-line change | v2 still uses Docker; unclear if base image was updated |
+| Use `andrcuns/allure-report-action` | Maintained alternative | Introduces unknown third-party action |
+| Install Allure CLI directly via tarball download | No Docker required, pinned version, no third-party trust issue | One extra step |
+
+**Chose direct CLI install** — most resilient and explicit:
+```yaml
+- name: Install Allure CLI
+  if: always()
+  run: |
+    wget -qO /tmp/allure.tgz \
+      https://github.com/allure-framework/allure2/releases/download/2.29.0/allure-2.29.0.tgz
+    sudo tar -xzf /tmp/allure.tgz -C /opt
+    sudo ln -s /opt/allure-2.29.0/bin/allure /usr/local/bin/allure
+
+- name: Generate Allure report
+  if: always()
+  run: allure generate allure-results -o allure-report --clean
+```
+
+No Docker, pinned to a specific Allure release, no third-party action trust required.
+
+**Secondary fix — `upload-artifact` path:**
+`uses:` steps are not affected by `defaults.run.working-directory` (only `run:` steps are).
+The `path:` for `upload-artifact` must be relative to the workspace root, so it needed
+the `panw-takehome/` prefix:
+```yaml
+# before (would have uploaded nothing or errored)
+path: allure-report
+
+# after
+path: panw-takehome/allure-report
+```
+
+**Tertiary fix — guard `junit.xml` parse in Test summary:**
+If tests fail to run (e.g., future Docker or install failure), `junit.xml` won't exist and
+the original `ET.parse("junit.xml")` raises `FileNotFoundError`, crashing the summary step.
+Added an `os.path.exists` guard so the summary degrades gracefully with a readable message
+instead of a traceback.
+
+**Backtrack cost:** 1 file edited, 1 commit, 1 push.
+
+---
+
+---
+
+## Quality gate boundary condition testing (post-CI review)
+
+**Motivation:**
+The SLA enforcement in `EnvironmentClient._request` is the centerpiece of the framework —
+it's the reason tests never call `time.monotonic()` directly. It had never been tested in
+isolation. The boundary conditions needed explicit coverage.
+
+**Boundary conditions identified:**
+
+| Condition | `elapsed` vs `threshold` | Expected outcome |
+|-----------|--------------------------|-----------------|
+| Under threshold | `elapsed < threshold` | No exception, response returned |
+| Exact boundary | `elapsed == threshold` | No exception — operator is strict `>`, not `>=` |
+| Just over (epsilon) | `elapsed = threshold + 0.001` | `SLAViolation` raised |
+| Well over | `elapsed = threshold * 3` | `SLAViolation` raised |
+| Exception type | — | `issubclass(SLAViolation, AssertionError)` is `True` |
+| Exception message | — | Contains env name, path, elapsed (3dp), threshold |
+
+**The exact-boundary case is worth calling out:** the implementation uses `>` (strict),
+not `>=`. A response that takes exactly `max_response_time` seconds is considered passing.
+This is intentional — a threshold is a limit, not a target, and floating-point timings
+will never land exactly on an integer boundary in practice. The test pins this contract
+so a future refactor can't silently change it to `>=`.
+
+**Implementation approach:**
+These are unit tests of the client itself, not API tests. They:
+- Create `EnvironmentClient` directly (intentional exception to the fixture rule — the
+  subject under test IS the client, not an API endpoint)
+- Mock `session.request` to return HTTP 200 instantly
+- Patch `src.clients.env_client.time.monotonic` with `side_effect=[start, end]` to inject
+  deterministic elapsed times
+- Never call `time.monotonic()` directly in test bodies (complies with framework rules —
+  the patch replaces the function, tests don't invoke it)
+
+**File:** `tests/shared/test_sla_enforcement.py`
+
+**Result:** 6 passed in 0.05s (pure mocks, no network I/O).
+
+---
+
 ## Summary of all backtracks
 
 | # | Stage | Type | Files changed | Iterations |
@@ -473,6 +655,9 @@ because the env didn't match the test — which was confusing and technically wr
 | 5a | Step 9 second run | Population API reality — attempt 1 | `test_countries.py` | 1 |
 | 5b | Step 9 third run | Population API reality — attempt 2 | `test_countries.py` | 1 |
 | 6 | Post-build review | Ghost test IDs from blind env_name parametrization | `conftest.py`, `test_countries.py`, `test_weather.py` | 1 |
+| 7 | Post-push | CI not triggering + latent working-directory bug | `.github/workflows/ci.yml` | 1 |
+| 8 | First real CI run | Dead Docker image in allure action blocks entire job | `.github/workflows/ci.yml` | 1 |
 
 Total pytest runs to reach green: **4**
 Total pytest runs to reach clean (no ghost skips): **5**
+Total CI runs to reach green: **3** (trigger fix → working-dir fix → allure action fix)
