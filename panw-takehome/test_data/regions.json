@@ -1,0 +1,14 @@
+{
+  "regions": [
+    {"name": "asia",    "min_countries": 40},
+    {"name": "europe",  "min_countries": 40},
+    {"name": "africa",  "min_countries": 50},
+    {"name": "oceania", "min_countries": 10},
+    {"name": "americas","min_countries": 30}
+  ],
+  "invalid_regions": [
+    {"name": "invalidregion", "description": "nonsense string"},
+    {"name": "123",           "description": "numeric string"},
+    {"name": "",              "description": "empty string — uses /region/ path"}
+  ]
+}
