@@ -1,47 +1,77 @@
-# Edge Case Analyzer
+# Skill: edge-case-analyzer
 
-## Purpose
-Identify realistic edge cases for public API testing in the panw-takehome framework
-without introducing brittle or speculative tests. This skill helps separate useful test
-ideas from hallucinated or low-value scenarios.
+Identify realistic edge cases for an endpoint in the panw-takehome framework.
+Separates high-signal cases from speculative ones before any test is written.
 
-## Use when
-- Exploring edge coverage for a new endpoint
-- Reviewing whether an existing test suite is too happy-path focused
-- Deciding which negative cases are worth implementing for public third-party APIs
+## Inputs
+- `endpoint_path` — e.g. `/region/{name}`, `/forecast`
+- `http_method` — GET | POST
+- `response_shape` — brief description of top-level fields
+- `known_invariants` — domain rules already encoded (e.g. in `CountryValidator`, `WeatherValidator`)
 
-## Required inputs
-- Endpoint path
-- HTTP method
-- Short description of expected response shape
-- Any business or domain invariants already known
+## Output
 
-## Output requirements
-- Return edge cases grouped by category
-- Label each edge case as:
-  - high-value
-  - optional
-  - likely hallucinated / low-value
-- Explain why each case matters
-- Recommend whether to automate it in this framework
+Edge cases grouped into four categories, each with a label and a recommendation:
+
+| Label | Meaning |
+|-------|---------|
+| `high-value` | Durable, catches real API regressions — implement |
+| `optional` | Useful but not critical — implement if time allows |
+| `likely hallucinated` | No public evidence this failure mode exists — skip |
+| `already covered` | Existing validator or test handles it — note and move on |
+
+For each case, state:
+- What the condition is
+- Why it matters (or doesn't)
+- Whether to automate it in this framework
 
 ## Framework constraints
-- Prefer durable edge cases over brittle data assumptions
-- Respect that this framework tests public third-party APIs
-- Avoid suggesting exact-value assertions for volatile data
-- Prioritize schema, SLA, missing fields, empty results, and domain-boundary conditions
 
-## Do not
-- Suggest internal-only failure modes with no public evidence
-- Recommend fragile snapshot assertions
-- Assume undocumented API behavior
+| Rule | Implication |
+|------|-------------|
+| Tests public third-party APIs | Cannot inject failures; must use real-world boundary values |
+| SLA enforced by `EnvironmentClient._request` | No need to suggest response-time edge cases |
+| Schema validated by `BaseValidator` subclasses | Suggest validator additions, not inline assertions |
+| Parametrize data from `test_data/*.json` | Edge cases that need data go in JSON files |
+| `env_client.config.min_results_count` gates empty-result assertions | Use it, not a hardcoded `0` |
 
-## Example
-Input:
-- GET `/forecast`
-- fields: `hourly.temperature_2m`, `timezone`
+## Categories to always check
 
-Expected output characteristics:
-- Suggests missing timezone, empty hourly array, out-of-range temperatures, slow response
-- Marks impossible or speculative cases as low confidence
-- Recommends only robust cases for implementation
+1. **Schema** — missing fields, wrong types, null values in arrays
+2. **Domain boundary** — empty lists, zero counts, extreme coordinates, mismatched array lengths
+3. **Invalid input** — bad param type, unknown resource name, empty string
+4. **SLA** — already covered by `EnvironmentClient`; mark any suggestion here as redundant
+5. **Volatile data** — exact counts, specific country names, current temperatures — mark as `likely hallucinated`
+
+## Anti-patterns to reject
+
+- Suggesting exact-value assertions on live API data (e.g. "assert London temperature == 12°C")
+- Concurrent / load testing against a public free API
+- Internal failure modes with no public evidence (e.g. "API returns duplicate cca3")
+- Snapshot assertions on full response bodies
+
+## Example output format
+
+```
+### Schema edge cases
+
+| Case | Label | Automate? |
+|------|-------|-----------|
+| temperature_2m contains null | high-value | Yes — add null guard in WeatherValidator.custom_checks |
+| time[] and temperature_2m[] length mismatch | high-value | Yes — assert len(temps) == len(times) |
+| timezone missing from response | already covered | WeatherValidator.required_fields |
+
+### Domain boundary cases
+
+| Case | Label | Automate? |
+|------|-------|-----------|
+| len(hourly.time) >= 24 | high-value | Yes — durable lower bound, not fragile exact count |
+| Coordinates snap to grid (response != request) | optional | No — don't assert exact match |
+
+### Likely hallucinated
+
+| Case | Why skip |
+|------|----------|
+| API returns 429 rate limit | No published rate limit; public free API |
+| temperature exactly == -80.0 | Real atmosphere never produces exact boundary |
+```
