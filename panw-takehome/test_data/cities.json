@@ -1,0 +1,9 @@
+{
+  "cities": [
+    {"name": "London",       "latitude": 51.5074,  "longitude": -0.1278},
+    {"name": "Tokyo",        "latitude": 35.6762,  "longitude": 139.6503},
+    {"name": "Sydney",       "latitude": -33.8688, "longitude": 151.2093},
+    {"name": "Reykjavik",    "latitude": 64.1466,  "longitude": -21.9426},
+    {"name": "Buenos Aires", "latitude": -34.6037, "longitude": -58.3816}
+  ]
+}
