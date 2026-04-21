@@ -19,6 +19,15 @@ class WeatherValidator(BaseValidator):
 
     @classmethod
     def custom_checks(cls, data: dict[str, Any]) -> None:
+        lat = data["latitude"]
+        lon = data["longitude"]
+        assert isinstance(lat, (int, float)) and -90 <= lat <= 90, (
+            f"{cls.__name__}: latitude {lat} outside valid range [-90, 90]"
+        )
+        assert isinstance(lon, (int, float)) and -180 <= lon <= 180, (
+            f"{cls.__name__}: longitude {lon} outside valid range [-180, 180]"
+        )
+
         times = data["hourly"].get("time")
         assert times and len(times) > 0, (
             f"{cls.__name__}: hourly.time must be a non-empty list"

@@ -3,13 +3,18 @@ from __future__ import annotations
 import urllib3
 import requests
 import pytest
-import allure
 
 # Suppress InsecureRequestWarning when verify_ssl=false is set in environments.yaml
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+from pathlib import Path
+
 from src.clients.env_client import EnvironmentClient
 from src.config.loader import load_environments
+from src.reporting.allure_hooks import _allure_env_tag  # noqa: F401 — registers autouse fixture
+
+# Single authoritative anchor for test data paths — imported by test modules.
+PROJECT_ROOT = Path(__file__).resolve().parent
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -59,15 +64,6 @@ def env_client(env_name: str) -> EnvironmentClient:  # type: ignore[misc]
     yield client  # type: ignore[misc]
     session.close()
 
-
-@pytest.fixture(autouse=True)
-def _allure_env_tag(request: pytest.FixtureRequest) -> None:
-    env_name: str | None = None
-    if "env_name" in request.fixturenames:
-        env_name = request.getfixturevalue("env_name")
-    if env_name:
-        allure.dynamic.epic(f"env:{env_name}")
-    allure.dynamic.feature(request.node.parent.name if request.node.parent else "root")
 
 
 def pytest_collection_modifyitems(

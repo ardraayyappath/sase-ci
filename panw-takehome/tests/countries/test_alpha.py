@@ -1,17 +1,15 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import allure
 import pytest
 
+from conftest import PROJECT_ROOT
 from src.clients.env_client import EnvironmentClient
 from src.validators.alpha_country import AlphaCountryValidator
 
-_DATA = json.loads(
-    (Path(__file__).resolve().parents[2] / "test_data" / "country_codes.json").read_text()
-)
+_DATA = json.loads((PROJECT_ROOT / "test_data" / "country_codes.json").read_text())
 _VALID_CODES = _DATA["valid_codes"]
 _INVALID_CODES = _DATA["invalid_codes"]
 

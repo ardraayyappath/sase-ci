@@ -1,16 +1,15 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import allure
 import pytest
 
+from conftest import PROJECT_ROOT
 from src.clients.env_client import EnvironmentClient
 from src.validators.weather import WeatherValidator
 
-_CITIES_PATH = Path(__file__).resolve().parents[2] / "test_data" / "cities.json"
-_CITIES: list[dict] = json.loads(_CITIES_PATH.read_text())["cities"]
+_CITIES: list[dict] = json.loads((PROJECT_ROOT / "test_data" / "cities.json").read_text())["cities"]
 
 
 

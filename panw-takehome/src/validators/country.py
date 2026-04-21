@@ -23,6 +23,6 @@ class CountryValidator(BaseValidator):
 
     @classmethod
     def custom_checks(cls, data: dict[str, Any]) -> None:
-        assert data["population"] > 0, (
-            f"{cls.__name__}: population must be > 0, got {data['population']}"
+        assert data["population"] >= 0, (
+            f"{cls.__name__}: population must be >= 0, got {data['population']}"
         )
