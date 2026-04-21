@@ -2,113 +2,53 @@
 
 ## Parallel agent runs
 
-### Run 1: validator-generator skill — RegionCountryValidator
+### Run 1: validator-generator — RegionCountryValidator
 
-**Trigger:** Needed a validator for `/region/{name}` entries before writing the region
-test file. Rather than hand-authoring it, invoked the `validator-generator` skill with a
-real API response as input.
+Invoked `validator-generator` with a live `/region/asia` response (Mongolia entry) and
+explicit field/type/semantic constraints. Output: `src/validators/region_country.py`,
+a `BaseValidator`-compliant class. No manual edits required.
 
-**Input provided to skill:**
-- Sample JSON: live `/region/asia` response entry (Mongolia), fetched during the session
-- Validator name: `RegionCountryValidator`
-- Required fields: `name`, `cca3`, `region`, `population`, `capital`
-- Field types: `name→dict`, `cca3→str`, `region→str`, `population→int`, `capital→list`
-- Semantic constraints: `population >= 0`, `region` non-empty, `cca3` exactly 3 chars
-
-**Skill constraints enforced (from `.claude/rules/framework-rules.md`):**
-- Subclasses `BaseValidator` — no `pydantic`, no `jsonschema`
-- `required_fields` declared as a `ClassVar` tuple, not checked in `custom_checks`
-- Assertion messages include `cls.__name__` for Allure readability
-- Validator makes no network calls, has no pytest fixture dependency
-
-**Output:** `src/validators/region_country.py` — `RegionCountryValidator` with
-`required_fields`, `field_types`, and `custom_checks` for all three semantic constraints.
-
-**What the skill prevented:** Without the rules, a naive generation would have used
-`pydantic.BaseModel` for field validation (the obvious Python choice). The
-`framework-rules.md` constraint redirected the output to `BaseValidator` so validation
-steps surface in Allure rather than raising `ValidationError` outside the test lifecycle.
+Key enforcements from rules:
+- `framework-rules.md` prevented `pydantic.BaseModel` — redirected to `BaseValidator` so
+  validation steps surface in Allure rather than raising `ValidationError` outside the
+  test lifecycle
+- `required_fields` kept as a `ClassVar` tuple; semantic checks isolated to `custom_checks`
+- All assertion messages include `cls.__name__` for Allure readability
 
 ---
 
-### Run 2: test-generator skill — region endpoint tests
+### Run 2: test-generator — test_regions.py
 
-**Trigger:** With `RegionCountryValidator` in place, invoked `test-generator` to produce
-the full test file for `/region/{name}`.
+Invoked `test-generator` for `GET /region/{region}` (countries environment). Output:
+`tests/countries/test_regions.py` — 3 test functions, 13 cases, 13/13 passed on first run.
 
-**Input provided to skill:**
-- `endpoint_path`: `/region/{region}`
-- `http_method`: GET
-- `environment`: countries
-- `expected_response_fields`: name, cca3, region, population, capital
-- `negative_cases`: invalid region name → 404, numeric string → 404, empty string → 404
-
-**Skill constraints enforced (from `.claude/rules/testing-standards.md`):**
-- Parametrize data loaded from `test_data/regions.json` — not inlined
-- Uses `env_client` fixture, never instantiates `EnvironmentClient` directly
-- Does not import `requests`
-- Does not import `time` or assert on elapsed manually
-- `allure.step` used for logical phases only; request steps emitted by the client
-- `pytest.param(..., id=...)` used for human-readable Allure names
-- Negative tests marked `@pytest.mark.negative`
-
-**Output:** `tests/countries/test_regions.py` — 3 test functions:
-1. `test_region_returns_sufficient_countries` — parametrized across 5 regions, asserts
-   count ≥ `min_results_count` AND ≥ region-specific floor from JSON
-2. `test_region_schema` — parametrized across 5 regions, validates first entry via
-   `RegionCountryValidator`
-3. `test_region_rejects_invalid` — `@pytest.mark.negative`, 3 invalid inputs from JSON
-
-**Result:** 13 passed, 0 failed on first run. No manual fixes required.
+Key enforcements from rules:
+- Parametrize data in `test_data/regions.json`, not inlined — enforced by `testing-standards.md`
+- `env_client.get()` only; no `import requests`, no `time.monotonic` — enforced by `framework-rules.md`
+- `@pytest.mark.negative` on invalid-region cases; `pytest.param(..., id=...)` throughout
 
 ---
 
-### Run 3: edge-case-analyzer skill — `/region/{name}` and `/forecast`
+### Run 3: edge-case-analyzer — WeatherValidator hardening
 
-**Trigger:** After completing the happy-path and schema tests, invoked the
-`edge-case-analyzer` skill to audit whether existing coverage was too optimistic and to
-surface any realistic gaps without introducing brittle or speculative tests.
+Invoked `edge-case-analyzer` against `GET /region/{name}` and `GET /forecast` after all
+happy-path tests were complete. Purpose: surface realistic gaps before closing coverage.
 
-**Input — Run 3a: GET `/region/{name}`**
-- Response: list of country objects with name, cca3, region, population, capital
-- Known invariants: cca3 is 3 chars, population >= 0, region matches query
-
-**Input — Run 3b: GET `/forecast`**
-- Response: hourly.time[], hourly.temperature_2m[], timezone, latitude, longitude
-- Known invariants: temps between -80 and 60°C, hourly.time non-empty
-
-**Skill output — labelled edge cases:**
+**Decisions from labelled output:**
 
 | Endpoint | Case | Label | Decision |
 |----------|------|-------|----------|
 | `/region` | `cca3` not 3 chars | high-value | Already in `RegionCountryValidator` ✓ |
-| `/region` | `region` field doesn't match queried region | high-value | Covered by `RegionCountryValidator` ✓ |
-| `/region` | Region name is a country name (e.g. `germany`) | optional | Added to `regions.json` invalid_regions |
-| `/region` | Concurrent requests causing throttle | likely hallucinated | Skipped |
-| `/forecast` | `temperature_2m` contains `null` entries | **high-value** | **Gap found — fixed** |
-| `/forecast` | `time` and `temperature_2m` arrays have different lengths | **high-value** | **Gap found — fixed** |
-| `/forecast` | `len(times) >= 24` (at least one day of data) | high-value | **Fixed** |
-| `/forecast` | Coordinates snap to grid (response coords ≠ request) | optional | Skipped — don't assert exact match |
-| `/forecast` | Temperature exactly at boundary (-80 or 60) | likely hallucinated | Skipped — impossible from real data |
-| `/forecast` | API returns 429 rate limit | likely hallucinated | Skipped |
+| `/region` | Concurrent throttle | likely hallucinated | Skipped |
+| `/forecast` | `null` in `temperature_2m` | **high-value** | Fixed — null guard in `WeatherValidator.custom_checks` |
+| `/forecast` | `time[]` / `temperature_2m[]` length mismatch | **high-value** | Fixed — parallel array assert |
+| `/forecast` | `len(times) >= 24` | high-value | Fixed — durable lower bound |
+| `/forecast` | Temperature exactly at ±80 boundary | likely hallucinated | Skipped — real data never hits this |
+| `/forecast` | API 429 rate limit | likely hallucinated | Skipped — no published limit |
 
-**Concrete fixes applied from skill output:**
-Three additions to `WeatherValidator.custom_checks`:
-1. `assert len(times) >= 24` — durable lower bound, not fragile exact count
-2. `assert len(temps) == len(times)` — parallel array contract
-3. Explicit `assert temp is not None` before range check — null guard
-
-All 15 weather + shared tests passed after the changes. The null and length-mismatch
-cases were genuine gaps that the happy-path test suite would not have caught because
-the real Open-Meteo API happens to return clean data. They would only surface if the
-API degraded (station offline → null entry) or changed array handling.
-
-**What the skill prevented:** Without the "likely hallucinated / low-value" labelling,
-a naive edge case list would include concurrent load testing, exact coordinate matching,
-and exact boundary temperatures — all of which would produce either flaky or permanently
-green tests that add no real signal.
-
----
+The labelling system was the key output — it gave principled grounds to skip 5 of 10
+cases rather than implementing speculative tests that would either be permanently green
+or permanently flaky.
 
 ---
 
@@ -116,89 +56,78 @@ green tests that add no real signal.
 
 ### When NOT to use subagents
 
-**Case rejected: parallel validator + test generation for Chinese cities**
+**Rejected: parallel generation for Chinese cities**
 
-Proposed: one agent runs `validator-generator`, another runs `test-generator`, both
-targeting new Chinese cities in `test_data/cities.json`.
+Running `validator-generator` and `test-generator` in parallel fails because the test
+imports the validator (`from src.validators.china_city import ChinaCityValidator`). The
+test-generator must know the class name before it can run — which means the design work
+is already done and the parallelism saves nothing. Each file is ~40 lines; sequential
+generation takes under 10 seconds. Overhead dominates.
 
-Rejected because:
-- The test file imports the validator (`from src.validators.china_city import ChinaCityValidator`). If both agents run in parallel, the test-generator must know the validator class name upfront — which means the design work is already done and the parallelism saves nothing.
-- Each file is ~40 lines. Subagent overhead (context init, tool permissions, result marshalling) dominates.
-- Both files can be generated sequentially in under 10 seconds.
-
-**Rule derived:** subagents are worth the overhead when tasks are non-trivial AND outputs go to entirely different files with zero import dependency between them.
+**Rule:** subagents pay off when outputs target different files with zero import dependency
+and the work is non-trivial enough to justify context initialization cost.
 
 ---
 
 ### Case 4 — Parallel coverage audit (2 agents)
 
-**What ran in parallel:**
-- Agent A: read all files under `tests/countries/`, list every `env_client.get()` call, parametrize source, and whether a `@pytest.mark.negative` test and `BaseValidator` schema test exist per endpoint
-- Agent B: same analysis for `tests/weather/`
+Two agents ran simultaneously: one read `tests/countries/`, the other `tests/weather/`.
+Each produced a coverage matrix — endpoints hit, parametrize source, negative test
+presence, schema validation presence. Neither agent's output depended on the other's.
+Results merged in under a minute.
 
-**Why genuinely parallel:** the two directories share no files. Neither agent's output depends on the other's. Both produce a coverage matrix — results merged by hand.
+**Findings that directly scoped Case 2:**
 
-**Findings:**
-
-| Environment | Covered endpoints | Missing |
+| Environment | Covered | Missing |
 |---|---|---|
 | countries | `/name/{name}`, `/region/{name}`, `/all` | `/alpha/{code}`, `/currency/`, `/lang/`, `/capital/`, `/subregion/` |
-| weather | `/forecast` (hourly `temperature_2m` only) | daily variables, multiple hourly vars, negative tests |
+| weather | `/forecast` hourly `temperature_2m` only | daily variables, negative tests |
 
-**Used directly to scope Case 2.**
+Running this audit sequentially would have been structurally identical — but parallelism
+meant both gap reports were available together, making the scope decision for Case 2
+immediate rather than iterative.
 
 ---
 
 ### Case 1 — Parallel edge-case analysis (2 agents)
 
-**What ran in parallel:**
-- Agent A: `edge-case-analyzer` for `GET /name/{country}` — read `CountryValidator`, `test_countries.py`, produced labelled table
-- Agent B: `edge-case-analyzer` for `GET /all` — same inputs, different endpoint
+Two agents ran simultaneously: one analysed `GET /name/{country}`, the other `GET /all`.
+Each read its own set of files (`CountryValidator`, the relevant test file) and produced
+an independent labelled table.
 
-**Why genuinely parallel:** each analysis reads its own endpoint docs and produces an independent labelled table. No shared output.
-
-**Selected high-value findings actioned:**
+**High-value findings actioned:**
 
 | Endpoint | Finding | Action |
 |---|---|---|
-| `/name/{country}` | `name.common` not checked in `CountryValidator` | Added to `AlphaCountryValidator.custom_checks` |
-| `/name/{country}` | `cca3` length not asserted | Added `len(cca3) == 3` in `AlphaCountryValidator` |
-| `/all` | Durable lower bound `>= 195` not asserted | Noted — deferred to avoid fragility |
-| `/all` | Invalid `?fields=` negative test missing | Noted for future sprint |
+| `/name/{country}` | `name.common` not checked | Added to `AlphaCountryValidator.custom_checks` |
+| `/name/{country}` | `cca3` length not asserted | `assert len(cca3) == 3` in `AlphaCountryValidator` |
+| `/all` | Durable lower bound `>= 195` | Deferred — tradeoff accepted (see Architectural Decisions) |
+| `/all` | Invalid `?fields=` negative test | Noted for future sprint |
 
-**Correctly labelled as hallucinated (not implemented):**
-- API returns duplicate `cca3` codes — no public evidence
-- Exact country count assertion — volatile, fails when API adds territories
-- HTTP 429 rate limiting — no published limit on this free API
+**Correctly skipped as hallucinated:** duplicate `cca3` codes, exact country count,
+HTTP 429 rate limiting.
 
 ---
 
 ### Case 2 — Parallel validator + test generation across environments (2 agents)
 
-**Informed by:** Case 4 audit gaps — `/alpha/{code}` uncovered in countries, daily forecast uncovered in weather.
+Directly informed by Case 4 gaps. Two agents ran simultaneously:
+- Agent A: `AlphaCountryValidator` + `test_data/country_codes.json` + `tests/countries/test_alpha.py` (fetched live `/alpha/DEU` response)
+- Agent B: `DailyWeatherValidator` + `tests/weather/test_daily_forecast.py` (fetched live `/forecast?daily=...` response)
 
-**What ran in parallel:**
-- Agent A (countries): generated `src/validators/alpha_country.py` (`AlphaCountryValidator`) + `test_data/country_codes.json` + `tests/countries/test_alpha.py`
-- Agent B (weather): generated `src/validators/daily_weather.py` (`DailyWeatherValidator`) + `tests/weather/test_daily_forecast.py`
+Zero import dependency between outputs; different directories, different validators,
+different API calls. Running these sequentially would have required waiting for the first
+validator to be committed before scaffolding the second test file — adding one full
+iteration cycle. Parallel generation collapsed that to a single review pass.
 
-**Why genuinely parallel:**
-- `AlphaCountryValidator` and `DailyWeatherValidator` are in different files and never import each other
-- `test_alpha.py` and `test_daily_forecast.py` are in different directories
-- Agent A fetched a live `/alpha/DEU` response; Agent B fetched a live `/forecast?daily=...` response — independent API calls
-- Zero reconciliation needed after merge
+**Result:** 48 passed, 0 failed on first run. Neither agent required manual fixes.
 
-**Results on first run:** 48 passed, 0 failed. Neither agent's output required manual fixes.
-
-**What each agent enforced from the skill files:**
-
-| Constraint | Agent A (countries) | Agent B (weather) |
+| Constraint enforced | Agent A | Agent B |
 |---|---|---|
-| `BaseValidator` subclass, no pydantic | ✓ `AlphaCountryValidator(BaseValidator)` | ✓ `DailyWeatherValidator(BaseValidator)` |
-| Data from `test_data/*.json`, not inline | ✓ `country_codes.json` | ✓ reused `cities.json` |
-| `env_client.get()` only, no `import requests` | ✓ | ✓ |
-| `allure.step` for logical phases only | ✓ | ✓ |
-| `@pytest.mark.negative` on negative tests | ✓ | ✓ |
-| Physics/domain invariant in `custom_checks` | ✓ `len(cca3)==3`, `ccn3.isdigit()` | ✓ `max >= min` per day |
+| `BaseValidator` subclass, no pydantic | `AlphaCountryValidator(BaseValidator)` | `DailyWeatherValidator(BaseValidator)` |
+| Data from `test_data/*.json` | `country_codes.json` | reused `cities.json` |
+| `env_client.get()` only | ✓ | ✓ |
+| Domain invariant in `custom_checks` | `len(cca3)==3`, `ccn3.isdigit()` | `max >= min` per day |
 
 ---
 
@@ -206,86 +135,88 @@ Rejected because:
 
 ### Decision: `pytest_generate_tests` over module-level `pytestmark`
 
-The spec suggested using `pytestmark = pytest.mark.parametrize("env_name", [...])` to
-lock env-specific test files to their environment. Claude identified that this conflicts
-with `pytest_generate_tests` in conftest — the two mechanisms would produce a cartesian
-product of `env_name` values, or error on duplicate parametrization.
+**Decision:** Centralise `env_name` parametrization in `conftest.py` via
+`pytest_generate_tests`, not via `pytestmark` in individual test modules.
 
-Chose `pytest_generate_tests` with path-based directory detection instead. This means
-`env_name` parametrization is centralised in one place and env-specific tests get exactly
-one variant — no ghost IDs, no module-level boilerplate.
+**Impact:** Eliminated all ghost test IDs. The no-flag run went from `13 passed, 9 skipped`
+to `13 passed, 0 skipped`. The `--env` flag filters globally without touching any test
+file. Adding a new environment requires one YAML entry — zero test-file changes.
 
-### Decision: path-based env detection to eliminate ghost test IDs
+**Why better than the alternative:** Module-level `pytestmark` conflicts with
+`pytest_generate_tests` — the two mechanisms produce a cartesian product of `env_name`
+values, or error on duplicate parametrization. Path-based directory detection in
+`pytest_generate_tests` locks env-specific tests to a single variant at collection time,
+so the problem cannot occur at runtime.
 
-After the initial build, running `pytest` (no flag) showed 9 skipped tests — all ghost
-`[countries-London]`, `[weather]` variants that existed only to be skipped. Claude
-identified that `pytest_generate_tests` was producing `env_name = ["countries", "weather"]`
-for every test regardless of directory.
+### Decision: path-based env detection eliminates ghost test IDs
 
-Fix: detect `/tests/countries/` or `/tests/weather/` in `metafunc.definition.fspath` and
-lock `env_name` to a single value for env-specific tests. Ghost IDs eliminated entirely.
-No-flag run went from `13 passed, 9 skipped` to `13 passed, 0 skipped`.
+Detected `/tests/countries/` or `/tests/weather/` in `metafunc.definition.fspath` and
+locked `env_name` to a single value per env-specific test. Ghost `[countries-London]`
+variants were never created, removing the need for `_weather_only` / `_countries_only`
+autouse fixtures entirely.
 
 ### Decision: `SLAViolation(AssertionError)` not `Exception`
 
-Subclassing `AssertionError` means pytest reports SLA breaches as FAILED (red), not ERROR
-(orange). This keeps CI dashboards and Allure category counts unambiguous — an SLA breach
-is a test failure by definition, not a framework error.
+SLA breaches report as FAILED (red), not ERROR (orange). CI dashboards and Allure
+category counts stay unambiguous — an SLA breach is a test failure by definition.
 
 ### Decision: `verify_ssl` as a first-class YAML field
 
-The machine runs behind a TLS-inspecting proxy. Options considered: monkey-patch
-`requests` globally, set `session.verify = False`, or add `verify_ssl` to YAML. Chose the
-YAML field — explicit, per-environment, visible to reviewers, overridable without code
-change. Default is `true` so new environments are safe out of the box.
+The machine runs behind a TLS-inspecting proxy. Chose an explicit `verify_ssl` field in
+`config/environments.yaml` over monkey-patching `requests` globally. Reviewers can see
+the override; new environments default to `true`; removing the proxy requires a one-line
+YAML change, no code change.
+
+### Tradeoff accepted: no exact country count assertion on `/all`
+
+The edge-case analysis flagged that asserting `len(resp.json()) >= 195` (UN member count)
+would be a stronger invariant than `>= min_results_count`. This was deliberately not
+implemented. The REST Countries dataset is externally owned and updated periodically —
+territories are added and removed. An exact lower-bound assertion would require manual
+maintenance each time the API changes. The tradeoff: accept slightly weaker validation
+in exchange for a test that never produces a false failure due to upstream data drift.
 
 ---
 
 ## Where Claude was wrong for this codebase
 
-### Case: wrong setuptools build backend
+### Wrong setuptools build backend
 
-Used `setuptools.backends.legacy:build` — a path that only exists in setuptools >= 67.
-The system Python had an older version. Should have used the stable `setuptools.build_meta`
-entrypoint from the start.
+Used `setuptools.backends.legacy:build` — only exists in setuptools >= 67. System Python
+had an older version. Should have used `setuptools.build_meta` from the start.
 
-### Case: `conftest.py` placed in `tests/` instead of project root
+### `conftest.py` placed in `tests/` instead of project root
 
-The assignment explicitly says "top-level conftest.py". Claude placed it in `tests/`
-because that's where pytest most commonly sees conftest files. A reviewer reading the spec
-and the tree would correctly flag this as a missed requirement. Moved to `panw-takehome/`
-(where `pytest.ini` lives) on review.
+The assignment says "top-level conftest.py". Placed it in `tests/` by habit. A reviewer
+reading the spec and the tree would correctly flag this. Moved to `panw-takehome/`
+(where `pytest.ini` lives).
 
-### Case: `test_base_url_reachable` bypassed `EnvironmentClient`
+### `test_base_url_reachable` bypassed `EnvironmentClient`
 
-The shared test called `env_client.session.get(base_url, ...)` directly — bypassing SLA
-enforcement, Allure step attachment, and violating the framework rule Claude itself wrote
-in `.claude/rules/framework-rules.md`. Fixed to `env_client.get("")` which hits the base
-URL through the client.
+Called `env_client.session.get(base_url, ...)` directly — bypassing SLA enforcement,
+Allure attachment, and violating the framework rule Claude itself wrote in
+`framework-rules.md`. Fixed to `env_client.get("")`.
 
-### Case: `simple-elf/allure-report-action@v1.7` uses a dead Docker image
+### `simple-elf/allure-report-action@v1.7` uses a dead Docker image
 
-Recommended this action without verifying the underlying `FROM openjdk:8-jre-alpine` base
-image still existed on Docker Hub. It had been removed. The action failed at job pre-build
-time, blocking the entire CI run before checkout or tests ran. Replaced with a direct
-Allure CLI tarball install.
+Recommended without verifying `FROM openjdk:8-jre-alpine` still existed on Docker Hub.
+It had been removed. The pre-build failure blocked the entire CI run before checkout or
+tests ran. Replaced with a direct Allure CLI tarball install.
 
 ---
 
 ## How rules changed Claude's output
 
-### Before/after: validator generation without vs with framework-rules.md
+### Validator generation — without vs with framework-rules.md
 
-**Without rules (what Claude would default to):**
+**Without rules:**
 ```python
 from pydantic import BaseModel
 
 class RegionCountryValidator(BaseModel):
     name: dict
     cca3: str
-    region: str
     population: int
-    capital: list
 
     @validator("population")
     def population_non_negative(cls, v):
@@ -293,7 +224,7 @@ class RegionCountryValidator(BaseModel):
         return v
 ```
 
-**With `.claude/rules/framework-rules.md` loaded:**
+**With `framework-rules.md`:**
 ```python
 class RegionCountryValidator(BaseValidator):
     required_fields: ClassVar[tuple[str, ...]] = ("name", "cca3", "region", ...)
@@ -304,12 +235,13 @@ class RegionCountryValidator(BaseValidator):
         assert data["population"] >= 0, f"{cls.__name__}: ..."
 ```
 
-The rule that prevented `pydantic`: *"Do not introduce `pydantic` or `jsonschema`; we
-enforce via classmethods so validation steps appear in Allure attachments."*
+Rule that fired: *"Do not introduce `pydantic` or `jsonschema`; we enforce via classmethods
+so validation steps appear in Allure attachments."* `pydantic` raises `ValidationError`
+outside the test lifecycle — invisible to Allure.
 
-### Before/after: test generation without vs with testing-standards.md
+### Test generation — without vs with testing-standards.md
 
-**Without rules (what Claude would default to):**
+**Without rules:**
 ```python
 @pytest.mark.parametrize("region", ["asia", "europe", "africa"])
 def test_region_returns_results(env_client, region):
@@ -319,19 +251,16 @@ def test_region_returns_results(env_client, region):
     assert time.time() - start < 2.0
 ```
 
-**With `.claude/rules/testing-standards.md` and `framework-rules.md` loaded:**
+**With `testing-standards.md` + `framework-rules.md`:**
 ```python
 _REGIONS = json.loads((_DATA_PATH / "regions.json").read_text())["regions"]
 
 @pytest.mark.parametrize("region", [pytest.param(r, id=r["name"]) for r in _REGIONS])
 def test_region_returns_sufficient_countries(env_client: EnvironmentClient, region: dict):
     with allure.step(f"Fetch /region/{region['name']}"):
-        resp = env_client.get(f"/region/{region['name']}")  # SLA automatic
+        resp = env_client.get(f"/region/{region['name']}")
     assert resp.status_code == 200
 ```
 
-Rules that fired:
-- No `requests` import — HTTP through `EnvironmentClient` only
-- No `time.time()` — SLA enforced by client
-- Parametrize data from JSON file, not inline strings
-- `pytest.param(..., id=...)` for readable Allure names
+Rules that fired: no `requests` import, no `time.time()`, parametrize from `regions.json`,
+`pytest.param(..., id=...)` for Allure names.
