@@ -63,6 +63,53 @@ the full test file for `/region/{name}`.
 
 ---
 
+### Run 3: edge-case-analyzer skill — `/region/{name}` and `/forecast`
+
+**Trigger:** After completing the happy-path and schema tests, invoked the
+`edge-case-analyzer` skill to audit whether existing coverage was too optimistic and to
+surface any realistic gaps without introducing brittle or speculative tests.
+
+**Input — Run 3a: GET `/region/{name}`**
+- Response: list of country objects with name, cca3, region, population, capital
+- Known invariants: cca3 is 3 chars, population >= 0, region matches query
+
+**Input — Run 3b: GET `/forecast`**
+- Response: hourly.time[], hourly.temperature_2m[], timezone, latitude, longitude
+- Known invariants: temps between -80 and 60°C, hourly.time non-empty
+
+**Skill output — labelled edge cases:**
+
+| Endpoint | Case | Label | Decision |
+|----------|------|-------|----------|
+| `/region` | `cca3` not 3 chars | high-value | Already in `RegionCountryValidator` ✓ |
+| `/region` | `region` field doesn't match queried region | high-value | Covered by `RegionCountryValidator` ✓ |
+| `/region` | Region name is a country name (e.g. `germany`) | optional | Added to `regions.json` invalid_regions |
+| `/region` | Concurrent requests causing throttle | likely hallucinated | Skipped |
+| `/forecast` | `temperature_2m` contains `null` entries | **high-value** | **Gap found — fixed** |
+| `/forecast` | `time` and `temperature_2m` arrays have different lengths | **high-value** | **Gap found — fixed** |
+| `/forecast` | `len(times) >= 24` (at least one day of data) | high-value | **Fixed** |
+| `/forecast` | Coordinates snap to grid (response coords ≠ request) | optional | Skipped — don't assert exact match |
+| `/forecast` | Temperature exactly at boundary (-80 or 60) | likely hallucinated | Skipped — impossible from real data |
+| `/forecast` | API returns 429 rate limit | likely hallucinated | Skipped |
+
+**Concrete fixes applied from skill output:**
+Three additions to `WeatherValidator.custom_checks`:
+1. `assert len(times) >= 24` — durable lower bound, not fragile exact count
+2. `assert len(temps) == len(times)` — parallel array contract
+3. Explicit `assert temp is not None` before range check — null guard
+
+All 15 weather + shared tests passed after the changes. The null and length-mismatch
+cases were genuine gaps that the happy-path test suite would not have caught because
+the real Open-Meteo API happens to return clean data. They would only surface if the
+API degraded (station offline → null entry) or changed array handling.
+
+**What the skill prevented:** Without the "likely hallucinated / low-value" labelling,
+a naive edge case list would include concurrent load testing, exact coordinate matching,
+and exact boundary temperatures — all of which would produce either flaky or permanently
+green tests that add no real signal.
+
+---
+
 ## Architectural decisions validated with Claude
 
 ### Decision: `pytest_generate_tests` over module-level `pytestmark`
