@@ -642,6 +642,30 @@ These are unit tests of the client itself, not API tests. They:
 
 **Result:** 6 passed in 0.05s (pure mocks, no network I/O).
 
+**Mutation testing — verifying the tests actually catch real bugs:**
+
+Two mutations were applied to `env_client.py` to confirm each test is meaningful:
+
+_Mutation 1: change `>` to `>=`_
+```python
+# mutant
+if elapsed >= threshold:
+```
+Expected failure: `test_sla_passes_at_exact_threshold` — it now raises `SLAViolation`
+when `elapsed == threshold`, which the test expects to pass.
+Actual result: exactly that test failed, all others passed. ✓
+
+_Mutation 2: remove the SLA check entirely_
+```python
+# mutant — block deleted
+```
+Expected failures: `test_sla_raises_just_over_threshold`,
+`test_sla_raises_well_over_threshold`, `test_sla_violation_message_contains_context` —
+all three expect `SLAViolation` to be raised, none of it happens.
+Actual result: exactly those three failed, pass cases were unaffected. ✓
+
+Implementation restored to `>` after both mutations confirmed.
+
 ---
 
 ## Summary of all backtracks
